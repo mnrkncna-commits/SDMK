@@ -61,7 +61,7 @@
             <button onclick="navigate('dashboard')" id="nav-dashboard" class="menu-item w-full text-left px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors flex items-center gap-3">
                 <i class="fa-solid fa-chart-pie w-5 text-center"></i> Dashboard Proyeksi
             </button>
-            <button onclick="navigate('pegawai')" id="nav-pegawai" class="menu-item w-full text-left px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors flex items-center gap-3">
+            <button onclick="navigate('pegawai')" id="nav-nav-pegawai" id="nav-pegawai" class="menu-item w-full text-left px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors flex items-center gap-3">
                 <i class="fa-solid fa-users-medical w-5 text-center"></i> Data Pegawai
             </button>
             <button onclick="navigate('kebutuhan')" id="nav-kebutuhan" class="menu-item w-full text-left px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors flex items-center gap-3">
@@ -941,10 +941,9 @@
                             else if (t === 'SATPAM') standardValue = 10;
                             else standardValue = 3;
                         } else if (f.type === 'Dinkes') {
-                            if (t === 'ADMINISTRATOR KESEHATAN') standardValue = 15 + yIdx;
-                            else if (t === 'TENAGA UMUM') standardValue = 25;
-                            else if (t === 'PENGELOLA DATA') standardValue = 5 + yIdx;
-                            else standardValue = 0;
+                            // PENGHAPUSAN TARGET ABK DI DINAS KESEHATAN
+                            // Dinas Kesehatan bersifat administratif, kuota rencana dinonaktifkan (bernilai 0)
+                            standardValue = 0;
                         } else if (f.type === 'Puskesmas') {
                             if (t === 'PERAWAT') standardValue = 12 + yIdx;
                             else if (t === 'BIDAN') standardValue = 10 + Math.floor(yIdx/2);
@@ -996,23 +995,16 @@
 
         // --- REALTIME SYNC LISTENER (FIREBASE) ---
         function setupRealtimeListeners() {
-            // Sinkronisasi Pegawai (Mendengarkan data di awan)
             onSnapshot(getEmpRef(), (snapshot) => {
-                if (snapshot.empty && employees.length === 0) {
-                    seedDummyDataToFirebase();
-                } else {
-                    employees = snapshot.docs.map(doc => doc.data());
-                    refreshCurrentView();
-                }
+                employees = snapshot.docs.map(doc => doc.data());
+                refreshCurrentView();
             }, (error) => console.error("Snapshot error:", error));
 
-            // Sinkronisasi Laporan
             onSnapshot(getRepRef(), (snapshot) => {
                 reports = snapshot.docs.map(doc => doc.data());
                 refreshCurrentView();
             }, (error) => console.error("Snapshot error:", error));
 
-            // Sinkronisasi Kebutuhan ABK
             onSnapshot(getKebRef(), (snapshot) => {
                 if (snapshot.exists()) {
                     const data = snapshot.data();
@@ -1044,6 +1036,13 @@
                 return;
             }
 
+            // CEK PROTEKSI: Jika pengguna adalah Admin Dinas Kesehatan, cegah akses menu ABK
+            if (viewId === 'kebutuhan' && currentUser.faskesId === 'f1') {
+                showToast("Dinas Kesehatan tidak memiliki modul perencanaan target ABK.");
+                navigate('dashboard');
+                return;
+            }
+
             document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden'));
             document.querySelectorAll('.menu-item').forEach(el => {
                 el.classList.remove('active', 'bg-accent', 'text-primary', 'font-semibold', 'border-r-4', 'border-primary');
@@ -1071,7 +1070,7 @@
                 const targetFaskes = faskesList.find(f => f.id === currentUser.faskesId);
                 if (targetFaskes) {
                     listJenisTenaga.forEach(t => {
-                        let needVal = (targetFaskes.kebutuhan[year] && targetFaskes.kebutuhan[year][t]) || 0;
+                        let needVal = (targetFaskes.kebutuhan && targetFaskes.kebutuhan[year] && targetFaskes.kebutuhan[year][t]) || 0;
                         let realVal = employees.filter(e => e.faskesId === targetFaskes.id && e.profesi === t).length;
                         totalNeed += needVal; totalReal += realVal;
                         if (realVal < needVal) totalGap += (needVal - realVal);
@@ -1080,7 +1079,7 @@
             } else {
                 faskesList.forEach(f => {
                     listJenisTenaga.forEach(t => {
-                        let needVal = (f.kebutuhan[year] && f.kebutuhan[year][t]) || 0;
+                        let needVal = (f.kebutuhan && f.kebutuhan[year] && f.kebutuhan[year][t]) || 0;
                         let realVal = employees.filter(e => e.faskesId === f.id && e.profesi === t).length;
                         totalNeed += needVal; totalReal += realVal;
                         if (realVal < needVal) totalGap += (needVal - realVal);
@@ -1252,7 +1251,7 @@
             let criticalGaps = [];
 
             listJenisTenaga.forEach((profesi, index) => {
-                let targetNeed = (currentFaskes.kebutuhan[selectedYear] && currentFaskes.kebutuhan[selectedYear][profesi]) || 0;
+                let targetNeed = (currentFaskes.kebutuhan && currentFaskes.kebutuhan[selectedYear] && currentFaskes.kebutuhan[selectedYear][profesi]) || 0;
                 let realActive = employees.filter(e => e.faskesId === selectedFaskesId && e.profesi === profesi).length;
                 let gapVal = realActive - targetNeed;
                 let pemenuhanPct = targetNeed > 0 ? Math.round((realActive / targetNeed) * 100) : 100;
@@ -1313,7 +1312,8 @@
 
         function showEditKebutuhanModal() {
             const selectFaskes = document.getElementById('abk-filter-faskes');
-            const targetFaskesId = selectFaskes ? selectFaskes.value : (currentUser ? currentUser.faskesId : 'f3');
+            // Jika Dinas Kesehatan entah bagaimana terpilih, alihkan fallback ke Puskesmas Topo (f3)
+            const targetFaskesId = (selectFaskes && selectFaskes.value !== 'f1') ? selectFaskes.value : 'f3';
             const faskesObj = faskesList.find(f => f.id === targetFaskesId);
             
             if(!faskesObj) return;
@@ -1337,7 +1337,7 @@
 
         function changeEditKebutuhanTahun() {
             const selectFaskes = document.getElementById('abk-filter-faskes');
-            const targetFaskesId = selectFaskes ? selectFaskes.value : (currentUser ? currentUser.faskesId : 'f3');
+            const targetFaskesId = (selectFaskes && selectFaskes.value !== 'f1') ? selectFaskes.value : 'f3';
             const faskesObj = faskesList.find(f => f.id === targetFaskesId);
             if(!faskesObj || !faskesObj.kebutuhan) return;
 
@@ -1346,7 +1346,7 @@
             containerFields.innerHTML = '';
 
             listJenisTenaga.forEach(t => {
-                let currentNeed = (faskesObj.kebutuhan[selectedYear] && faskesObj.kebutuhan[selectedYear][t]) || 0;
+                let currentNeed = (faskesObj.kebutuhan && faskesObj.kebutuhan[selectedYear] && faskesObj.kebutuhan[selectedYear][t]) || 0;
                 containerFields.innerHTML += `
                     <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100 hover:bg-gray-100/50 transition-colors">
                         <label class="text-xs font-bold text-gray-700 uppercase pr-2">${t}</label>
@@ -1359,7 +1359,7 @@
         async function handleSaveKebutuhan(e) {
             e.preventDefault();
             const selectFaskes = document.getElementById('abk-filter-faskes');
-            const targetFaskesId = selectFaskes ? selectFaskes.value : (currentUser ? currentUser.faskesId : 'f3');
+            const targetFaskesId = (selectFaskes && selectFaskes.value !== 'f1') ? selectFaskes.value : 'f3';
             const faskesObj = faskesList.find(f => f.id === targetFaskesId);
             
             if(!faskesObj) return;
@@ -1413,9 +1413,10 @@
                 ];
 
                 let rowNo = 1;
-                faskesList.forEach(f => {
+                // Dinas Kesehatan sengaja diekslusikan dari rekapan berkas ekspor ABK
+                faskesList.filter(f => f.type !== 'Dinkes').forEach(f => {
                     listJenisTenaga.forEach(t => {
-                        let need = (f.kebutuhan[selectedYear] && f.kebutuhan[selectedYear][t]) || 0;
+                        let need = (f.kebutuhan && f.kebutuhan[selectedYear] && f.kebutuhan[selectedYear][t]) || 0;
                         let real = employees.filter(e => e.faskesId === f.id && e.profesi === t).length;
                         let gap = real - need;
                         let pct = need > 0 ? Math.round((real / need) * 100) : 100;
@@ -1758,7 +1759,8 @@
             
             if (loginSelect) {
                 loginSelect.innerHTML = '<option value="">-- Pilih Fasilitas Kesehatan --</option>';
-                faskesList.forEach(f => loginSelect.add(new Option(f.name, f.id)));
+                // Menyaring daftar login: Menghapus RSUD (type: 'Rumah Sakit') dari dropdown login faskes
+                faskesList.filter(f => f.type !== 'Rumah Sakit').forEach(f => loginSelect.add(new Option(f.name, f.id)));
             }
             if (filterSelect) {
                 filterSelect.innerHTML = '<option value="">Semua Faskes</option>';
@@ -1766,7 +1768,9 @@
             }
             if (abkSelect) {
                 abkSelect.innerHTML = '';
-                faskesList.forEach(f => abkSelect.add(new Option(f.name, f.id)));
+                // PENYARINGAN DROPDOWN ABK:
+                // Mengeluarkan Dinas Kesehatan (type: 'Dinkes') agar tidak dapat dipilih dalam modul perencanaan ABK
+                faskesList.filter(f => f.type !== 'Dinkes').forEach(f => abkSelect.add(new Option(f.name, f.id)));
             }
         }
 
@@ -1866,6 +1870,16 @@
                 document.getElementById('sidebar-nav').classList.remove('hidden');
                 document.getElementById('user-display-name').innerText = currentUser.nameDisplay;
 
+                // PROTEKSI MENU: Sembunyikan navigasi Perencanaan ABK jika masuk sebagai Admin Dinas Kesehatan (f1)
+                const navKebutuhan = document.getElementById('nav-kebutuhan');
+                if (navKebutuhan) {
+                    if (currentUser.faskesId === 'f1') {
+                        navKebutuhan.classList.add('hidden');
+                    } else {
+                        navKebutuhan.classList.remove('hidden');
+                    }
+                }
+
                 if(currentUser.role === 'admin_pkm') {
                     document.getElementById('user-display-role').innerText = "Admin Faskes";
                     document.getElementById('btn-add-pegawai').classList.remove('hidden');
@@ -1874,7 +1888,14 @@
                     document.getElementById('btn-download-all-pegawai').classList.add('hidden');
                     document.getElementById('btn-download-summary').classList.add('hidden');
                     document.getElementById('btn-export-abk').classList.add('hidden');
-                    document.getElementById('btn-edit-kebutuhan').classList.remove('hidden');
+                    
+                    // Sembunyikan Atur Standar Kebutuhan untuk Admin Dinkes faskes lokal (f1)
+                    const btnEditKebutuhan = document.getElementById('btn-edit-kebutuhan');
+                    if (btnEditKebutuhan) {
+                        if (currentUser.faskesId === 'f1') btnEditKebutuhan.classList.add('hidden');
+                        else btnEditKebutuhan.classList.remove('hidden');
+                    }
+
                     document.getElementById('nav-faskes').classList.add('hidden');
                     const filterFaskesWrap = document.getElementById('filter-faskes');
                     if (filterFaskesWrap) { filterFaskesWrap.value = currentUser.faskesId; filterFaskesWrap.disabled = true; filterFaskesWrap.classList.add('bg-gray-100'); }
@@ -2053,6 +2074,9 @@
 
         // --- INISIALISASI ---
         window.onload = async () => {
+            // Selalu jalankan inisialisasi struktur kebutuhan baseline faskes
+            initKebutuhanTenaga();
+
             // Setup Firebase dan Auth
             try {
                 if (isSandbox && typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
